@@ -238,6 +238,22 @@ def _reader_loop(term: TerminalSession) -> None:
     finally:
         term.closed.set()
         code = term.proc.poll()
+        # Issue #2577: reap the PTY shell as soon as the reader loop ends.
+        # When the user types ``exit`` (or the shell dies on its own), the
+        # reader_loop breaks on EIO / poll() != None but nothing else calls
+        # proc.wait(): close_terminal() is only invoked when the user
+        # explicitly closes the terminal panel or the WebUI process exits via
+        # the atexit hook. Without a wait() the kernel keeps the exited child
+        # around as a zombie until the WebUI process dies — accumulating one
+        # entry per opened-and-exited terminal (same class as #1912).
+        try:
+            if code is None:
+                code = term.proc.wait(timeout=0.5)
+            else:
+                # Already exited; non-blocking wait is enough to reap.
+                term.proc.wait(timeout=0)
+        except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
+            pass
         term.put_output("terminal_closed", {"exit_code": code})
 
 
