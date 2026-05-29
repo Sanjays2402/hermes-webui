@@ -152,6 +152,58 @@ def _active_skills_dir() -> Path:
             return Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser() / "skills"
 
 
+def _active_config_path() -> Path:
+    """Return config.yaml path for the request's active Hermes profile.
+
+    Mirrors ``_active_skills_dir()``: WebUI profile switches are cookie/
+    thread-local scoped (``process_wide=False``), so the agent-side
+    ``hermes_cli.config.load_config()`` keeps reading the process-startup
+    ``HERMES_HOME`` and returns the wrong profile's ``skills.disabled``
+    list (#3066). Resolve the path through ``get_active_hermes_home()``
+    so reads and writes target the active per-request profile.
+    """
+    try:
+        from api.profiles import get_active_hermes_home
+
+        return Path(get_active_hermes_home()) / "config.yaml"
+    except Exception:
+        env_override = os.getenv("HERMES_CONFIG_PATH")
+        if env_override:
+            return Path(env_override).expanduser()
+        return Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser() / "config.yaml"
+
+
+def _active_disabled_skill_names() -> set[str]:
+    """Return disabled skill names from the request-active profile's config.
+
+    Replaces ``tools.skills_tool._get_disabled_skill_names()`` for WebUI
+    contexts, which reads ``HERMES_HOME`` from ``os.environ`` and so
+    always returns the process-startup profile's disabled list rather
+    than the request-active profile's (#3066).
+    """
+    import yaml as _yaml
+    cfg_path = _active_config_path()
+    try:
+        if not cfg_path.exists():
+            return set()
+        with cfg_path.open("r", encoding="utf-8") as fh:
+            cfg = _yaml.safe_load(fh) or {}
+    except Exception:
+        return set()
+    skills_cfg = cfg.get("skills") if isinstance(cfg, dict) else None
+    if not isinstance(skills_cfg, dict):
+        return set()
+    # Prefer the webui-platform list when present (same precedence as the
+    # agent's get_disabled_skill_names() with HERMES_SESSION_PLATFORM=webui).
+    platform_disabled = skills_cfg.get("platform_disabled")
+    if isinstance(platform_disabled, dict) and isinstance(platform_disabled.get("webui"), list):
+        return {str(n) for n in platform_disabled["webui"] if n}
+    disabled = skills_cfg.get("disabled")
+    if isinstance(disabled, list):
+        return {str(n) for n in disabled if n}
+    return set()
+
+
 def _skill_path_within(base_dir: Path, candidate: Path) -> bool:
     try:
         candidate.resolve().relative_to(base_dir.resolve())
@@ -223,7 +275,6 @@ def _skills_list_from_dir(skills_dir: Path, category: str | None = None) -> dict
     from tools.skills_tool import (
         MAX_DESCRIPTION_LENGTH,
         _EXCLUDED_SKILL_DIRS,
-        _get_disabled_skill_names,
         _parse_frontmatter,
         _sort_skills,
         skill_matches_platform,
@@ -240,7 +291,11 @@ def _skills_list_from_dir(skills_dir: Path, category: str | None = None) -> dict
 
     all_skills = []
     seen_names: set[str] = set()
-    disabled = _get_disabled_skill_names()
+    # Issue #3066: use the request-active profile's disabled list rather than
+    # the process-startup profile's. The agent's _get_disabled_skill_names()
+    # reads HERMES_HOME from os.environ, which our per-request cookie-scoped
+    # profile switch (process_wide=False) intentionally does not update.
+    disabled = _active_disabled_skill_names()
     search_dirs = _active_skill_search_dirs(skills_dir)
 
     for scan_dir in search_dirs:
@@ -12099,7 +12154,7 @@ def _handle_skill_toggle(handler, body):
     if not skill_md:
         return bad(handler, f"Skill '{name}' not found", 404)
 
-    config_path = _get_config_path()
+    config_path = _active_config_path()  # #3066: per-request profile, not process-startup
     with _cfg_lock:
         cfg = _load_yaml_config_file(config_path)
 
