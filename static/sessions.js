@@ -614,12 +614,15 @@ async function loadSession(sid){
     if(_msgInner){
       if(e.status===404){
         _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Session not available in web UI.</div>';
-        // Option A (#2798): for boot-time stale URL/localStorage session IDs,
-        // always clear persisted session, strip /session/{id} from URL, and
-        // rethrow so boot can deterministically fall through to empty-state.
+        // Issue #2782: any 404 from /api/session means the id is dead on the
+        // server (file deleted, container rebuild, etc.). Always strip
+        // /session/{id} from the URL and clear localStorage so a reload does
+        // not re-inject the dead id via _sessionIdFromLocation(). Without this,
+        // a tab open on a stale /session/<id> URL stays trapped — the client
+        // self-heal previously only fired at boot (currentSid==null).
+        try{ localStorage.removeItem('hermes-webui-session'); }catch(_){ }
+        try{ history.replaceState(null,'',_appRootPath()); }catch(_){ }
         if(!currentSid){
-          try{ localStorage.removeItem('hermes-webui-session'); }catch(_){ }
-          try{ history.replaceState(null,'',_appRootPath()); }catch(_){ }
           if (_loadingSessionId === sid) _loadingSessionId = null;
           throw e;
         }

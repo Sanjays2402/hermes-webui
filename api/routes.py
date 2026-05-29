@@ -4445,7 +4445,15 @@ def handle_get(handler, parsed) -> bool:
             # Not a WebUI session -- try CLI store
             cli_meta = _lookup_cli_session_metadata(sid)
             msgs = get_cli_session_messages(sid)
-            if msgs:
+            # Issue #2782: only synthesize a 200 response when this is genuinely
+            # a CLI-store session (cli_meta identifies it). Orphan state.db rows
+            # left behind after a WebUI session.json was deleted (e.g. docker
+            # rebuild) would otherwise be wrapped in a fake "CLI Session" payload
+            # and returned as 200, while POST /api/session/draft and
+            # /api/chat/start correctly 404 for the same id. The asymmetry traps
+            # the UI in a dead session with no self-heal path because the
+            # client's 404 branch is never triggered.
+            if msgs and cli_meta:
                 sess = {
                     "session_id": sid,
                     "title": (cli_meta or {}).get("title", "CLI Session"),
