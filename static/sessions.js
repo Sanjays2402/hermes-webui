@@ -407,8 +407,18 @@ function _markPollingCompletionUnreadTransitions(sessions) {
       )
     );
     const completedPersistedObservedStream = Boolean(observedStreaming && !isStreaming);
-    if ((completedObservedStream || completedPersistedObservedStream || completedWithNewMessages) && !_isSessionActivelyViewedForList(sid)) {
-      _markSessionCompletionUnread(sid, s.message_count);
+    if (completedObservedStream || completedPersistedObservedStream || completedWithNewMessages) {
+      if (_isSessionActivelyViewedForList(sid)) {
+        // Issue #3020: when the user is actively viewing a session that just
+        // received new messages, skip the unread marker but still sync the
+        // viewed count to the current message count. Otherwise the stale
+        // viewed count triggers a false unread dot the moment the user
+        // navigates away — the dot then persists indefinitely until the
+        // session is reopened.
+        _setSessionViewedCount(sid, messageCount);
+      } else {
+        _markSessionCompletionUnread(sid, s.message_count);
+      }
     }
     _sessionStreamingById.set(sid, isStreaming);
     if (isStreaming) {
