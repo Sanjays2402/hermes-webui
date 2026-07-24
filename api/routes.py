@@ -13015,6 +13015,20 @@ def handle_get(handler, parsed) -> bool:
             # the wire shape stays byte-equivalent to the previous inline
             # synthesis (the frontend has been reading these exact keys).
             msgs = list(synth.messages or [])
+            # Foreign (CLI/TUI/Desktop) sessions get the same paginated display
+            # contract as WebUI-owned ones. Without this the stub shipped every
+            # row on every load and omitted _messages_truncated entirely, so the
+            # frontend's hasServerOlder check was always false: no "Load earlier
+            # messages" button and the whole transcript stayed resident.
+            if load_messages:
+                _foreign_window, _foreign_offset = _message_window_for_display(
+                    msgs,
+                    msg_limit=msg_limit,
+                    msg_before=msg_before,
+                    expand_renderable=True,
+                )
+            else:
+                _foreign_window, _foreign_offset = [], 0
             sess = {
                 "session_id": synth.session_id,
                 "title": synth.title,
@@ -13054,9 +13068,15 @@ def handle_get(handler, parsed) -> bool:
                 # sessions and the user only discovers the block at
                 # POST time with a confusing 403.
                 "read_only": bool(getattr(synth, "read_only", False)),
-                "messages": msgs,
+                "messages": _foreign_window,
                 "tool_calls": [],
+                "_messages_truncated": bool(
+                    load_messages and msg_limit is not None and _foreign_offset > 0
+                ),
+                "_messages_offset": _foreign_offset,
             }
+            # todo_state stays derived from the FULL history, matching the
+            # native path above.
             attach_todo_state(sess, msgs)
             sess = _merge_cli_sidebar_metadata(sess, cli_meta)
             return j(handler, {"session": redact_session_data(sess)})
